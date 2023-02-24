@@ -4,6 +4,7 @@ library(tidyverse)
 library(dplyr)
 library(zoo)
 #setwd(getwd())
+source("utility_functions.R")
 
 FileName <- 'Ohio STRS BModel Inputs.xlsx'
 EntryYear <- 1980:2052
@@ -12,7 +13,7 @@ YearStart <- 2022
 Age <- 18:120
 YOS <- 0:70
 #RetirementAge <- 20:120
-RetYear <- 1980:2154
+RetYear <- 2005:2154
 
 
 ModelPeriod <- 100    #Projection period (typically 30 years)
@@ -76,13 +77,13 @@ SalaryEntry <- SalaryHeadCountData %>%
   rename(start_sal = Salary)
 ##############################################################################################################################
 IsRetirementEligible_Regular <- function(Age, YOS, RetYear){
-  Check = ifelse((YOS >= 5 & Age >= 65), TRUE, 
+  Check = ifelse((YOS >= 5 & Age >= 65), TRUE,
                  ifelse(RetYear <= 2015 & YOS >= 30, TRUE,
                         ifelse(RetYear <= 2017 & YOS >= 31, TRUE,
                                ifelse(RetYear <= 2019 & YOS >= 32, TRUE,
                                       ifelse(RetYear <= 2021 & YOS >= 33, TRUE,
                                              ifelse(RetYear <= 2023 & YOS >= 34, TRUE,
-                                                    ifelse(RetYear <= 2026 & YOS >= 35, TRUE, 
+                                                    ifelse(RetYear <= 2026 & YOS >= 35, TRUE,
                                                            ifelse(RetYear > 2026 & Age >= 60 & YOS >= 35, TRUE, FALSE))))))))
   return(Check)
 }
@@ -479,12 +480,14 @@ OptimumBenefit_CB <- BenefitsTable %>%
 #### Actuarial PV of Pension Wealth = Pension Wealth 
 #Combine optimal benefit with employee balance and calculate the PV of future benefits and salaries 
 #####################################
+
 source("utility_functions.R")
 Balance_Benefit_Split <- 0.5
 FinalData <- SalaryData %>% 
   left_join(OptimumBenefit_DB, by = c("EntryYear", "entry_age", "Age" = "term_age")) %>% 
   left_join(OptimumBenefit_CB, by = c("EntryYear", "entry_age", "Age" = "term_age", "RetirementAge")) %>% 
   left_join(SeparationRates, by = c("EntryYear", "Age", "YOS", "entry_age", "Years" = "RetYear")) %>%
+  group_by(EntryYear, entry_age) %>%
   mutate(SepType = SeparationType(Age,YOS, Years),
          #DBWealth = ifelse(SepType == 'Retirement', pmax(DBEEBalance,Max_PV_DB), 
          #                   ifelse(SepType == 'Termination Vested', Balance_Benefit_Split*DBEEBalance + (1-Balance_Benefit_Split)*Max_PV_DB, DBEEBalance)),
@@ -501,48 +504,42 @@ FinalData <- SalaryData %>%
          PVFB_DB = PVFB(sep_rate_vec = SepRate, interest = ARR, value_vec = DBWealth),
          PVFB_CB = PVFB(sep_rate_vec = SepRate, interest = ARR, value_vec = CBWealth),
          PVFS = PVFS(remaining_prob_vec = RemainingProb, interest = ARR, sal_vec = Salary),
-         normal_cost_DB = PVFB_DB[YOS == 0] / PVFS[YOS == 0],
-         normal_cost_CB = PVFB_CB[YOS == 0] / PVFS[YOS == 0],
+         normal_cost_DB = PVFB_DB[YOS == 2] / PVFS[YOS == 2],
+         normal_cost_CB = PVFB_CB[YOS == 2] / PVFS[YOS == 2],
          PVFNC_DB = PVFS * normal_cost_DB,
          PVFNC_CB = PVFS * normal_cost_CB) %>%
   replace(is.na(.), 0)
 
 
-
-sep_rate_vec <- SeparationRates$SepRate
-interest <- ARR
-value_vec <- OptimumBenefit_DB$Max_PV_DB
-
-PVFB <- function(sep_rate_vec, interest, value_vec) {
-  PVFB <- double(length = length(value_vec))
-  for (i in 1:length(value_vec)) {
-    print(i)
-    sep_rate <- sep_rate_vec[i:length(sep_rate_vec)]
-    #sep_prob in a given year is the probability that the member will survive all the previous years and get terminated exactly in the given year
-    sep_prob <- cumprod(1 - lag(sep_rate, n = 2, default = 0)) * lag(sep_rate, default = 0) 
-    value <- value_vec[i:length(value_vec)]
-    value_adjusted <- value * sep_prob
-    PVFB[i] <- npv(interest, value_adjusted[2:length(value_adjusted)])
-  }
-  return(PVFB)
-}
+# #Calculate normal cost rate for each entry age
+# NormalCost <- FinalData %>% 
+#   group_by(EntryYear, entry_age) %>%
+#   replace(is.na(.), 0) %>%
+#   summarise(normal_cost = sum(PVPenWealth)/sum(PVCumWage)) %>%
+#   left_join(SalaryHeadCountData, by = c("EntryYear","entry_age")) %>%
+#   replace(is.na(.), 0) %>%
+#   #filter(EntryYear == 2022) %>%
+#   filter(Age > 0) %>%
+#   ungroup()
+# 
+# #Calculate the aggregate normal cost
+# NC_aggregate <- sum(NormalCost$normal_cost * NormalCost$Salary * NormalCost$HeadCount)/
+#   sum(NormalCost$Salary * NormalCost$HeadCount)
 
 
-#Calculate normal cost rate for each entry age
+
+#Calculate normal cost rate for each entry age in each entry year
 NormalCost <- FinalData %>% 
-  group_by(EntryYear, entry_age) %>%
-  replace(is.na(.), 0) %>%
-  summarise(normal_cost = sum(PVPenWealth)/sum(PVCumWage)) %>%
-  left_join(SalaryHeadCountData, by = c("EntryYear","entry_age")) %>%
-  replace(is.na(.), 0) %>%
-  #filter(EntryYear == 2022) %>%
-  filter(Age > 0) %>%
-  ungroup()
+  filter(YOS == 0) %>% 
+  select(EntryYear, entry_age, normal_cost_DB, normal_cost_CB)
 
-#Calculate the aggregate normal cost
-NC_aggregate <- sum(NormalCost$normal_cost * NormalCost$Salary * NormalCost$HeadCount)/
-  sum(NormalCost$Salary * NormalCost$HeadCount)
-
+#Calculate the aggregate normal cost for current year (for testing purposes)
+NC_aggregate <- NormalCost %>% 
+  left_join(SalaryHeadCountData, by = c("EntryYear", "entry_age")) %>%
+  left_join(SalaryData %>% select(EntryYear, entry_age, Age, Salary), by = c("EntryYear", "entry_age", "Age", "Salary")) %>% 
+  filter(!is.na(HeadCount)) %>% 
+  summarise(normal_cost_aggregate_DB = sum(normal_cost_DB * Salary * HeadCount) / sum(Salary * HeadCount),
+            normal_cost_aggregate_CB = sum(normal_cost_CB * Salary * HeadCount) / sum(Salary * HeadCount))
 #Calculate the aggregate normal cost
 #NC_aggregate  
 ################################
