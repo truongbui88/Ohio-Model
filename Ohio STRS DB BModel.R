@@ -482,16 +482,17 @@ OptimumBenefit_CB <- BenefitsTable %>%
 #####################################
 
 source("utility_functions.R")
-Balance_Benefit_Split <- 0.5
+Balance_Benefit_Split <- 0.2
 FinalData <- SalaryData %>% 
   left_join(OptimumBenefit_DB, by = c("EntryYear", "entry_age", "Age" = "term_age")) %>% 
   left_join(OptimumBenefit_CB, by = c("EntryYear", "entry_age", "Age" = "term_age", "RetirementAge")) %>% 
   left_join(SeparationRates, by = c("EntryYear", "Age", "YOS", "entry_age", "Years" = "RetYear")) %>%
   group_by(EntryYear, entry_age) %>%
   mutate(SepType = SeparationType(Age,YOS, Years),
-         #DBWealth = ifelse(SepType == 'Retirement', pmax(DBEEBalance,Max_PV_DB), 
-         #                   ifelse(SepType == 'Termination Vested', Balance_Benefit_Split*DBEEBalance + (1-Balance_Benefit_Split)*Max_PV_DB, DBEEBalance)),
-         DBWealth = pmax(DBEEBalance,Max_PV_DB),
+         DBWealth = ifelse(SepType == 'Retirement', pmax(DBEEBalance,Max_PV_DB), 
+                            ifelse(SepType == 'Termination Vested', Balance_Benefit_Split*DBEEBalance + (1-Balance_Benefit_Split)*Max_PV_DB, DBEEBalance)),
+         
+         #DBWealth = pmax(DBEEBalance,Max_PV_DB),
          #PenWealth = pmax(DBEEBalance,MaxBenefit),  #50% lump sum, 50% optimal retirement
          #PenWealth = 0.5*(DBEEBalance + MaxBenefit),
          RealPenWealth = DBWealth/(1 + assum_infl)^YOS,
@@ -508,24 +509,8 @@ FinalData <- SalaryData %>%
          normal_cost_CB = PVFB_CB[YOS == 2] / PVFS[YOS == 2],
          PVFNC_DB = PVFS * normal_cost_DB,
          PVFNC_CB = PVFS * normal_cost_CB) %>%
-  replace(is.na(.), 0)
-
-
-# #Calculate normal cost rate for each entry age
-# NormalCost <- FinalData %>% 
-#   group_by(EntryYear, entry_age) %>%
-#   replace(is.na(.), 0) %>%
-#   summarise(normal_cost = sum(PVPenWealth)/sum(PVCumWage)) %>%
-#   left_join(SalaryHeadCountData, by = c("EntryYear","entry_age")) %>%
-#   replace(is.na(.), 0) %>%
-#   #filter(EntryYear == 2022) %>%
-#   filter(Age > 0) %>%
-#   ungroup()
-# 
-# #Calculate the aggregate normal cost
-# NC_aggregate <- sum(NormalCost$normal_cost * NormalCost$Salary * NormalCost$HeadCount)/
-#   sum(NormalCost$Salary * NormalCost$HeadCount)
-
+  replace(is.na(.), 0) %>%
+  ungroup()
 
 
 #Calculate normal cost rate for each entry age in each entry year
@@ -540,6 +525,7 @@ NC_aggregate <- NormalCost %>%
   filter(!is.na(HeadCount)) %>% 
   summarise(normal_cost_aggregate_DB = sum(normal_cost_DB * Salary * HeadCount) / sum(Salary * HeadCount),
             normal_cost_aggregate_CB = sum(normal_cost_CB * Salary * HeadCount) / sum(Salary * HeadCount))
+
 #Calculate the aggregate normal cost
 #NC_aggregate  
 ################################
