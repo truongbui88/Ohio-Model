@@ -62,8 +62,7 @@ IsRetirementEligible_DB_Regular <- function(Age, YOS, RetYear){
                                ifelse(RetYear <= 2019 & YOS >= 32, TRUE,
                                       ifelse(RetYear <= 2021 & YOS >= 33, TRUE,
                                              ifelse(RetYear <= 2023 & YOS >= 34, TRUE,
-                                                    ifelse(RetYear <= 2026 & YOS >= 35, TRUE,
-                                                           ifelse(RetYear > 2026 & Age >= 60 & YOS >= 35, TRUE, FALSE))))))))
+                                                    ifelse(YOS >= 35, TRUE, FALSE)))))))
   return(Check)
 }
 
@@ -74,8 +73,7 @@ IsRetirementEligible_DB_Early <- function(Age, YOS, RetYear){
                                ifelse(RetYear <= 2017 & YOS >= 26 & Age >= 55, TRUE,
                                       ifelse(RetYear <= 2019 & YOS >= 27 & Age >= 55, TRUE,
                                              ifelse(RetYear <= 2021 & YOS >= 28 & Age >= 55, TRUE,
-                                                    ifelse(RetYear <= 2023 & YOS >= 29 & Age >= 55, TRUE,
-                                                           ifelse(RetYear > 2023 & YOS >= 30 & Age >= 25, TRUE, FALSE))))))))
+                                                    ifelse(RetYear <= 2023 & YOS >= 29 & Age >= 55, TRUE, FALSE)))))))
   return(Check)
 }
 
@@ -110,7 +108,7 @@ IsRetirementEligible_Hybrid_Regular <- function(Age, YOS, RetYear){
 }
 
 IsRetirementEligible_Hybrid_Early <- function(Age, YOS, RetYear){
-  Check = ifelse(Age >= 50 & Age < 60 & YOS >= 5, TRUE, FALSE)
+  Check = ifelse(Age >= 50 & YOS >= 5, TRUE, FALSE)
   
   return(Check)
 }
@@ -415,9 +413,9 @@ get_benefit_data <- function(
            
            DC_EEContrib = DC_EE_cont*Salary,
            Hybrid_EEContrib = DC_DB_EE_cont*Salary,
-           Hybrid_EEBalance = ifelse(YOS < 3, cumFV(0.02, (DC_EEContrib + Hybrid_EEContrib)),
-                                     ifelse(YOS >=3 & YOS < 5, cumFV(0.03, (DC_EEContrib + Hybrid_EEContrib)),
-                                            cumFV(0.03, 1.5*(DC_EEContrib + Hybrid_EEContrib)))),
+           Hybrid_EEBalance = ifelse(YOS < 3, cumFV(0.02, Hybrid_EEContrib),
+                                     ifelse(YOS >= 3 & YOS < 5, cumFV(0.03, Hybrid_EEContrib),
+                                            cumFV(0.03, 1.5 * Hybrid_EEContrib))),
            
            
            # CBEEContAmount = CB_EE_paycredit * Salary,
@@ -480,18 +478,33 @@ get_benefit_data <- function(
     mutate(Years = EntryYear + Age - entry_age,
            #Years is the same as retirement years
            RetYear = Years) %>% 
-    left_join(EarlyRetirement_Before2015, by = c("Age", "YOS")) %>%
-    left_join(EarlyRetirement_After2015, by = c("Age", "YOS")) %>%
+    # left_join(EarlyRetirement_Before2015, by = c("Age", "YOS")) %>%
+    # left_join(EarlyRetirement_After2015, by = c("Age", "YOS")) %>%
+    left_join(AnnFactorData, by = c("EntryYear", "entry_age", "Age", "YOS", "RetYear")) %>%
+    select(EntryYear, entry_age, Age, YOS, Years, RetYear, term_year, surv_DR_DB, AnnuityFactor_DR_DB) %>% 
+    rename(surv_DR_DB_early = surv_DR_DB,
+           AnnuityFactor_DR_DB_early = AnnuityFactor_DR_DB) %>% 
     replace(is.na(.), 0) %>% 
     #group_by(RetYear, Age, YOS) %>% 
-    mutate(RetType = RetirementType_DB(Age, YOS, RetYear),
-           RF_Before2015 = ifelse(RetType == "Early", EarlyRetPct_Before2015,
-                                  ifelse(RetType == "None", 0, 1)),
-           RF_After2015 = ifelse(RetType == "Early", EarlyRetPct_After2015/100/(YOS*BenMult_DB),
-                                 ifelse(RetType == "None", 0, 1))) %>% 
-    rename(RetirementAge = Age) %>% 
+    mutate(RetType_DB = RetirementType_DB(Age, YOS, RetYear),
+           RetType_Hybrid = RetirementType_Hybrid(Age, YOS, RetYear),
+           norm_retire_DB = ifelse(RetType_DB == "Regular", 1, 0),
+           norm_retire_Hybrid = ifelse(RetType_Hybrid == "Regular", 1, 0)) %>% 
+    group_by(EntryYear, entry_age, YOS) %>% 
+    mutate(norm_retire_age_DB = max(Age) - sum(norm_retire_DB) + 1,
+           norm_retire_age_Hybrid = max(Age) - sum(norm_retire_Hybrid) + 1) %>%
     ungroup() %>% 
-    select(-Years, -RetYear)
+    left_join(AnnFactorData %>% select(EntryYear, entry_age, Age, YOS, surv_DR_DB, AnnuityFactor_DR_DB), by = c("EntryYear", "entry_age", "norm_retire_age_DB" = "Age", "YOS")) %>% 
+    left_join(AnnFactorData %>% 
+                select(EntryYear, entry_age, Age, YOS, surv_DR_DB, AnnuityFactor_DR_DB) %>% 
+                rename(surv_DR_Hybrid = surv_DR_DB,
+                       AnnuityFactor_DR_Hybrid = AnnuityFactor_DR_DB), by = c("EntryYear", "entry_age", "norm_retire_age_Hybrid" = "Age", "YOS")) %>% 
+    mutate(RF_DB = ifelse(RetType_DB == "Early", AnnuityFactor_DR_DB * surv_DR_DB / surv_DR_DB_early / AnnuityFactor_DR_DB_early,
+                          ifelse(RetType_DB == "None", 0, 1)),
+           RF_Hybrid = ifelse(RetType_Hybrid == "Early", AnnuityFactor_DR_Hybrid * surv_DR_Hybrid / surv_DR_DB_early / AnnuityFactor_DR_DB_early,
+                              ifelse(RetType_Hybrid == "None", 0, 1))) %>% 
+    rename(RetirementAge = Age) %>% 
+    select(EntryYear, entry_age, RetirementAge, YOS, RF_DB, RF_Hybrid)
   
   
   BenefitsTable <- AnnFactorData %>%
@@ -502,30 +515,31 @@ get_benefit_data <- function(
     left_join(ReducedFactor, by = c("EntryYear", "entry_age", "RetirementAge", "YOS")) %>%
     
     # YOS is in the benefit section because of graded multipliers
-    mutate(BaseBenefit1 = ifelse(YOS >= 35, Cumuative_Mult_2015*FinalAvgSalary_3YR, 0.022*FinalAvgSalary_3YR*YOS),
-           BaseBenefit2 = 86*YOS,
-           RF = ifelse(RetYear < 2015, RF_Before2015, RF_After2015),
-           DBBenefit = ifelse(RetYear < 2015, pmax(BaseBenefit1,BaseBenefit2), 
-                              BenMult_DB*FinalAvgSalary_5YR*YOS),
-           #cal_factor is a calibration factor added to match the normal cost from the val report.
-           DBBenefit = DBBenefit * cal_factor,
-           
-           AnnFactorAdj_DB = AnnuityFactor_DR_DB * surv_DR_DB,
-           DB_Benefit = RF * DBBenefit,
-           PV_DB_Benefit = DB_Benefit*AnnFactorAdj_DB,
-           
-           AnnFactorAdj_Hybrid = AnnuityFactor_DR_Hybrid * surv_DR_Hybrid,
-           HybridBenefit_5YR = ifelse(RetirementAge >= 60 & YOS >= 5, BenMult_Hybrid*FinalAvgSalary_5YR*YOS, 0),
-           HybridBenefit_3YR = ifelse(RetirementAge >= 60 & YOS >= 5, BenMult_Hybrid*FinalAvgSalary_3YR*YOS, 0),
-           #HybridBenefit = ifelse(RetYear >= 2015, HybridBenefit_5YR, HybridBenefit_3YR),
-           PV_Hybrid_Benefit = ifelse(RetYear >= 2015, HybridBenefit_5YR, HybridBenefit_3YR),
-           
-           # CBBalance_final = CBBalance / surv_ICR,                                                       #project the cash balance forward to the annuitization day 
-           # CB_Benefit = CBBalance_final / AnnuityFactor_ACR,                                             #annuitize the final cash balance
-           # PV_CB_Benefit = ifelse(YOS >= CB_vesting, CB_Benefit * AnnFactorAdj_DB, CBBalance),
-           
-           #Get retirement eligibility 
-           can_retire = IsRetirementEligible_DB(Age = RetirementAge, YOS, RetYear))
+    mutate(
+      # BaseBenefit1 = ifelse(YOS >= 35, Cumuative_Mult_2015*FinalAvgSalary_3YR, 0.022*FinalAvgSalary_3YR*YOS),
+      # BaseBenefit2 = 86*YOS,
+      # RF = ifelse(RetYear < 2015, RF_Before2015, RF_After2015),
+      DB_Benefit = BenMult_DB * FinalAvgSalary_5YR * YOS * RF_DB,
+      Hybrid_Benefit = BenMult_Hybrid * FinalAvgSalary_5YR * YOS * RF_Hybrid,
+      #cal_factor is a calibration factor added to match the normal cost from the val report. We don't use it for Ohio as the PVFBs would be too low.
+      DB_Benefit = DB_Benefit * cal_factor,
+      Hybrid_Benefit = Hybrid_Benefit * cal_factor,
+      
+      AnnFactorAdj_DB = AnnuityFactor_DR_DB * surv_DR_DB,
+      PV_DB_Benefit = DB_Benefit * AnnFactorAdj_DB,
+      
+      # AnnFactorAdj_Hybrid = AnnuityFactor_DR_Hybrid * surv_DR_Hybrid,
+      # HybridBenefit_5YR = ifelse(RetirementAge >= 60 & YOS >= 5, BenMult_Hybrid*FinalAvgSalary_5YR*YOS, 0),
+      # HybridBenefit_3YR = ifelse(RetirementAge >= 60 & YOS >= 5, BenMult_Hybrid*FinalAvgSalary_3YR*YOS, 0),
+      #HybridBenefit = ifelse(RetYear >= 2015, HybridBenefit_5YR, HybridBenefit_3YR),
+      PV_Hybrid_Benefit = Hybrid_Benefit * AnnFactorAdj_DB,
+      
+      # CBBalance_final = CBBalance / surv_ICR,                                                       #project the cash balance forward to the annuitization day 
+      # CB_Benefit = CBBalance_final / AnnuityFactor_ACR,                                             #annuitize the final cash balance
+      # PV_CB_Benefit = ifelse(YOS >= CB_vesting, CB_Benefit * AnnFactorAdj_DB, CBBalance),
+      
+      #Get retirement eligibility 
+      can_retire = IsRetirementEligible_DB(Age = RetirementAge, YOS, RetYear))
   # replace(is.na(.), 0)
   
   
@@ -548,7 +562,8 @@ get_benefit_data <- function(
   BenefitsTable_retire <- BenefitsTable %>% 
     semi_join(retire_age_tab) %>% 
     select(EntryYear, entry_age, term_age, RetirementAge, PV_DB_Benefit, PV_Hybrid_Benefit, AnnFactorAdj_DB) %>% 
-    mutate(PV_DB_Benefit = ifelse(is.na(PV_DB_Benefit), 0, PV_DB_Benefit))
+    mutate(PV_DB_Benefit = ifelse(is.na(PV_DB_Benefit), 0, PV_DB_Benefit),
+           PV_Hybrid_Benefit = ifelse(is.na(PV_Hybrid_Benefit), 0, PV_Hybrid_Benefit))
   
   
   #For a given combination of entry year, entry age and termination age, the DB member is assumed to choose the retirement age that maximizes the PV of future retirement benefits. That value is the "optimum benefit". 
@@ -596,18 +611,20 @@ get_benefit_data <- function(
     group_by(EntryYear, entry_age) %>%
     mutate(
       DR = ifelse(EntryYear <= YearStart, dr_current, dr_new),
-      SepType = SeparationType_DB(Age,YOS, Years),
+      SepType = SeparationType_DB(Age, YOS, Years),
       # LumpSumPct = 0.2,
       #Term vested DB members are assumed to choose between a refund and deferred benefits based on a retire/refund ratio. This ratio can change for calibration purposes.
       DBWealth = ifelse(SepType == 'Retirement', PV_DB_Benefit, 
                         ifelse(SepType == 'Termination Vested', retire_refund_ratio * PV_DB_Benefit + (1 - retire_refund_ratio) * DBEEBalance, DBEEBalance)),
       
+      HybridWealth = ifelse(SepType == "Retirement", PV_Hybrid_Benefit,
+                            ifelse(SepType == "Termination Vested", retire_refund_ratio * PV_Hybrid_Benefit + (1 - retire_refund_ratio) * Hybrid_EEBalance, Hybrid_EEBalance)),
+      
       ben_decision = ifelse(YOS == 0, NA, ifelse(SepType == "Retirement", "retire",
                                                  ifelse(SepType == "Termination Vested", "mix", "refund"))),
       #HybridWealth = ifelse(SepType == 'Retirement', pmax(Hybrid_EEBalance,Max_PV_Hybrid), 
       #                   ifelse(SepType == 'Termination Vested', LumpSumPct*Hybrid_EEBalance + (1-LumpSumPct)*Max_PV_Hybrid, Hybrid_EEBalance)),
-      LumpSumPct_Hybrid = 0.3,
-      HybridWealth = LumpSumPct_Hybrid*Hybrid_EEBalance + (1-LumpSumPct_Hybrid)*PV_Hybrid_Benefit,
+      
       # CBWealth = ifelse(DBWealth == DBEEBalance, CBBalance, PV_CB_Benefit),   #mimic DB members' behavior. This is to simplify the workforce projection done later.
       
       RealPenWealth = DBWealth/(1 + assum_infl)^YOS,
@@ -619,7 +636,7 @@ get_benefit_data <- function(
       #Calculate present value of future benefits (PVFB) 
       PVFB_DB = PVFB(sep_rate_vec = SepRate_DB, interest_vec = DR, value_vec = DBWealth),
       # PVFB_CB = PVFB(sep_rate_vec = SepRate_DB, interest = ARR, value_vec = CBWealth),
-      PVFB_Hybrid = PVFB(sep_rate_vec = SepRate_Hybrid, interest_vec = DR, value_vec = HybridWealth),
+      PVFB_Hybrid = PVFB(sep_rate_vec = SepRate_DB, interest_vec = DR, value_vec = HybridWealth),
       
       #Calculate present value of future salaries (PVFS)
       PVFS = PVFS(remaining_prob_vec = RemainingProb_DB, interest_vec = DR, sal_vec = Salary),

@@ -40,9 +40,15 @@ source("Ohio STRS funding model.R")
 ##############################################TESTING############################################
 
 
+# baseline_funding <- get_funding_data()
+# reduceDR <- get_funding_data(dr_current = 0.06, dr_new = 0.06)
+# 
+# baseline_liab <- get_liability_data()
+# reduceDR_liab <- get_liability_data(dr_current = 0.06, dr_new = 0.06)
+# 
+# baseline_ADC <- get_funding_data(funding_policy = "ADC")
 
-
-
+# baseline_liab <- get_liability_data()
 # baseline <- get_funding_data()
 # 
 # lower_amo <- get_funding_data(funding_policy = "ADC",
